@@ -7,50 +7,26 @@ library(ggplot2)
 
 # Load data
 census_api_key("509520e4a2870f2d97c9a9825581a7a923efbb9e", install = TRUE)
-
-properties <- read.csv("data/property_assessments_2021.csv")
-addresses <- read.csv("data/sam_addresses.csv", stringsAsFactors = FALSE)
-dp04 <- read.csv("data/dp042020.csv")
-
-
-geo_props <- left_join(properties, addresses, by = c("PID" = "PARCEL"))
-
-by_yr_const <- properties %>% group_by(YR_BUILT)
-
-summarise(properties)
-
+ 
+# properties <- read.csv("data/property_assessments_2021.csv")
+# addresses <- read.csv("data/sam_addresses.csv", stringsAsFactors = FALSE)
 # 
-# race_vars2000 = c(
-#   White = "P003003",
-#   Black = "P003004",
-#   Native = "P003005",
-#   Asian = "P003006",
-#   HIPI = "P003007",
-#   Hispanic = "P004002",
-#   Mixed = "P003009",
-#   Other = "P003008"
-# )
 # 
-# race_vars2010 = c(
-#   White = "P003002",
-#   Black = "P003003",
-#   Native = "P003004",
-#   Asian = "P003005",
-#   HIPI = "P003006",
-#   Hispanic = "P004003",
-#   Mixed = "P003008",
-#   Other = "P003007"
-# )
+# geo_props <- left_join(properties, addresses, by = c("PID" = "PARCEL"))
+# 
+# by_yr_const <- properties %>% group_by(YR_BUILT)
+# 
+# summarise(properties)
 
 race_vars_acs = c(
-  White = "B03002_003",
-  Black = "B03002_004",
-  Native = "B03002_005",
-  Asian = "B03002_006",
-  HIPI = "B03002_007",
-  Hispanic = "B03002_012",
-  Mixed = "B03002_009",
-  Other = "B03002_008"
+  White = "DP05_0077",
+  Black = "DP05_0078",
+  Native = "DP05_0079",
+  Asian = "DP05_0080",
+  HIPI = "DP05_0081",
+  Hispanic = "DP05_0071",
+  MixedNonHispanic = "DP05_0083",
+  Other = "DP05_0082"
 )
 
 housing_vars_acs = c(
@@ -59,32 +35,6 @@ housing_vars_acs = c(
   RenterOccupied = "DP04_0046",
   PercentOwner = "DP04_0045P",
   PercentRenter = "DP04_0046P"
-)
-
-acs2010 <- get_acs(
-  geography = "tract",
-  state = "MA",
-  county = "Suffolk",
-  year = 2010,
-  variables = housing_vars_acs
-)
-
-acs2015 <- get_acs(
-  geography = "tract",
-  state = "MA",
-  county = "Suffolk",
-  year = 2015,
-  variables = housing_vars_acs
-)
-
-
-
-race2010 <- get_acs(
-  geography = "tract",
-  state = "MA",
-  county = "Suffolk",
-  year = 2010,
-  variables = race_vars_acs
 )
 
 # Function to calculate entropy index of segregation
@@ -135,7 +85,22 @@ pivoted_entropy <- race_by_year %>%
               values_from = estimate,
               values_fn = entropy_index)
 
-# Iterate over every year for every tract
+# Convert back into long format
+longer_entropy <- pivoted_entropy %>%
+  pivot_longer(!NAME, names_to = "year", values_to = "Entropy")
+
+# Get changes in entropy index from previous year
+entropy_changes <- longer_entropy %>%
+  group_by(NAME) %>%
+  mutate(EntropyChange = (Entropy - lag(Entropy)))
+
+# Compare 2010 to 2019 for longer term effects
+entropy_changes_longer <- longer_entropy %>%
+  filter(year == "y2010" | year == "y2019") %>%
+  group_by(NAME) %>%
+  mutate(EntropyChange = (Entropy - lag(Entropy)))
+
+# Get estimated percent of occupied units occupied by renters for each census tract in Suffolk County
 percent_rental_by_year <- map_dfr(years, ~{
   get_acs(
     geography = "tract",
@@ -159,17 +124,33 @@ pivoted_rental <- percent_rental_by_year %>%
   mutate_at(vars(y2015, y2016, y2017, y2018, y2019), 
             function(x) {return(100 - x)})
 
+# Convert back into long format
 longer_rental <- pivoted_rental %>% 
   pivot_longer(!NAME, names_to = "year", values_to = "PercentRenterOccupied")
 
-stacked_series <- ggplot(longer_rental, aes(x = year, y = PercentRenterOccupied, group = NAME)) + 
-  geom_point() +
-  geom_line()
+# Get changes in rental percentages from previous year
+rental_changes <- longer_rental %>%
+  group_by(NAME) %>%
+  mutate(RentalChange = (PercentRenterOccupied - lag(PercentRenterOccupied)))
 
-filtered <- filter(longer_rental, NAME == "Census Tract 1, Suffolk County, Massachusetts")
-time_series <- ggplot(filtered, aes(x = year, y = PercentRenterOccupied)) +
+# Compare 2010 to 2019 for longer term effects
+rental_changes_longer <- longer_rental %>%
+  filter(year == "y2010" | year == "y2019") %>%
+  group_by(NAME) %>%
+  mutate(RentalChange = (PercentRenterOccupied - lag(PercentRenterOccupied)))
+
+# Join both tables
+joined <- left_join(entropy_changes, rental_changes, by = c("NAME", "year"))
+joined_longer <- left_join(entropy_changes_longer, rental_changes_longer, by = c("NAME", "year"))
+
+
+# Exploratory visualizations
+scatterplot <- ggplot(joined, aes(x = RentalChange, y = EntropyChange)) +
   geom_point() +
-  geom_line(group = 1) +
-  ylim(0, 100) +
-  xlab("year") +
-  ylab("Percent renter owned")
+  xlim(-15, 15) +
+  ylim(-0.26, 0.25)
+
+scatterplot2 <- ggplot(joined_longer, aes(x = RentalChange, y = EntropyChange)) +
+  geom_point() +
+  xlim(-15, 15) +
+  ylim(-0.26, 0.25) 
