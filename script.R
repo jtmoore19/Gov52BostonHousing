@@ -7,28 +7,20 @@ library(ggplot2)
 
 # Load data
 census_api_key("509520e4a2870f2d97c9a9825581a7a923efbb9e", install = TRUE)
- 
-# properties <- read.csv("data/property_assessments_2021.csv")
-# addresses <- read.csv("data/sam_addresses.csv", stringsAsFactors = FALSE)
-# 
-# 
-# geo_props <- left_join(properties, addresses, by = c("PID" = "PARCEL"))
-# 
-# by_yr_const <- properties %>% group_by(YR_BUILT)
-# 
-# summarise(properties)
 
+# Question codes for ACS race counts
 race_vars_acs = c(
-  White = "DP05_0077",
-  Black = "DP05_0078",
-  Native = "DP05_0079",
-  Asian = "DP05_0080",
-  HIPI = "DP05_0081",
-  Hispanic = "DP05_0071",
-  MixedNonHispanic = "DP05_0083",
-  Other = "DP05_0082"
+  White = "DP05_0072",
+  Black = "DP05_0073",
+  Native = "DP05_0074",
+  Asian = "DP05_0075",
+  HIPI = "DP05_0076",
+  Hispanic = "DP05_0070",
+  MixedNonHispanic = "DP05_0078",
+  Other = "DP05_0077"
 )
 
+# Question codes for ACS housing unit occupancy characteristics
 housing_vars_acs = c(
   TotalOccupied = "DP04_0044",
   OwnerOccupied = "DP04_0045",
@@ -37,13 +29,30 @@ housing_vars_acs = c(
   PercentRenter = "DP04_0046P"
 )
 
+# Question codes for ACS income bins in order of below $10k,
+# $10k-$15k, $15k-$25k, $25k-$35k, $35k-$50k, $50k-$75k, $75k-$100k,
+# $100k-$150k, $150k-$200k, and more than $200k
+income_vars_acs = c(
+  bin1 = "DP03_0052",
+  bin2 = "DP03_0053",
+  bin3 = "DP03_0054",
+  bin4 = "DP03_0055",
+  bin5 = "DP03_0056",
+  bin6 = "DP03_0057",
+  bin7 = "DP03_0058",
+  bin8 = "DP03_0059",
+  bin9 = "DP03_0060",
+  bin10 = "DP03_0061"
+)
+
 # Function to calculate entropy index of segregation
 # https://www.dartmouth.edu/~segregation/IndicesofSegregation.pdf
-entropy_index <- function(race_counts) {
-  total_pop <- sum(race_counts)
+# Note that max value of index is ln(k) where k = number of racial groups
+entropy_index <- function(counts) {
+  total_pop <- sum(counts)
   entropy <- 0
-  for(i in length(race_counts)) {
-    prop <- race_counts[i]/total_pop
+  for(i in length(counts)) {
+    prop <- counts[i]/total_pop
     entropy <- entropy -(prop) * log(prop)
   }
   return(entropy)
@@ -55,6 +64,8 @@ names(years) <- years
 
 # Code structure taken from link below
 # https://walker-data.com/census-r/wrangling-census-data-with-tidyverse-tools.html#preparing-time-series-acs-estimates
+
+# RACE
 # Get racial estimates for each census tract in Suffolk County
 race_by_year <- map_dfr(years, ~{
   get_acs(
@@ -77,7 +88,7 @@ pivoted_race <- race_by_year %>%
               values_from = estimate)
 
 # Calculate time series of entropy index 
-pivoted_entropy <- race_by_year %>%
+pivoted_race_entropy <- race_by_year %>%
   group_by(NAME, year) %>%
   pivot_wider(id_cols = NAME,
               names_from = year,
@@ -86,20 +97,55 @@ pivoted_entropy <- race_by_year %>%
               values_fn = entropy_index)
 
 # Convert back into long format
-longer_entropy <- pivoted_entropy %>%
-  pivot_longer(!NAME, names_to = "year", values_to = "Entropy")
+longer_race_entropy <- pivoted_race_entropy %>%
+  pivot_longer(!NAME, names_to = "year", values_to = "RaceEntropy")
 
 # Get changes in entropy index from previous year
-entropy_changes <- longer_entropy %>%
+race_entropy_changes <- longer_race_entropy %>%
   group_by(NAME) %>%
-  mutate(EntropyChange = (Entropy - lag(Entropy)))
+  mutate(RaceEntropyChange = (RaceEntropy - lag(RaceEntropy)))
 
-# Compare 2010 to 2019 for longer term effects
-entropy_changes_longer <- longer_entropy %>%
-  filter(year == "y2010" | year == "y2019") %>%
+# INCOME
+# Get income estimates for each census tract in Suffolk County
+income_by_year <- map_dfr(years, ~{
+  get_acs(
+    geography = "tract",
+    variables = income_vars_acs,
+    state = "MA",
+    county = "Suffolk",
+    summary_var = "DP03_0062",
+    survey = "acs5",
+    year = .x
+  )
+}, .id = "year")
+
+# Calculate time series of income bins
+pivoted_income <- income_by_year %>%
+  group_by(NAME, year) %>%
+  pivot_wider(id_cols = NAME,
+              names_from = year,
+              names_prefix = "y",
+              values_from = estimate)
+
+# Calculate time series of entropy index for income 
+pivoted_income_entropy <- income_by_year %>%
+  group_by(NAME, year) %>%
+  pivot_wider(id_cols = NAME,
+              names_from = year,
+              names_prefix = "y",
+              values_from = estimate,
+              values_fn = entropy_index)
+
+# Convert back into long format
+longer_income_entropy <- pivoted_income_entropy %>%
+  pivot_longer(!NAME, names_to = "year", values_to = "IncomeEntropy")
+
+# Get changes in entropy index from previous year
+income_entropy_changes <- longer_income_entropy %>%
   group_by(NAME) %>%
-  mutate(EntropyChange = (Entropy - lag(Entropy)))
+  mutate(IncomeEntropyChange = (IncomeEntropy - lag(IncomeEntropy)))
 
+# HOUSING
 # Get estimated percent of occupied units occupied by renters for each census tract in Suffolk County
 percent_rental_by_year <- map_dfr(years, ~{
   get_acs(
@@ -133,24 +179,28 @@ rental_changes <- longer_rental %>%
   group_by(NAME) %>%
   mutate(RentalChange = (PercentRenterOccupied - lag(PercentRenterOccupied)))
 
-# Compare 2010 to 2019 for longer term effects
-rental_changes_longer <- longer_rental %>%
-  filter(year == "y2010" | year == "y2019") %>%
-  group_by(NAME) %>%
-  mutate(RentalChange = (PercentRenterOccupied - lag(PercentRenterOccupied)))
+# Join all tables
+joined <- left_join(race_entropy_changes, rental_changes, by = c("NAME", "year")) %>%
+  left_join(income_entropy_changes, by = c("NAME", "year"))
 
-# Join both tables
-joined <- left_join(entropy_changes, rental_changes, by = c("NAME", "year"))
-joined_longer <- left_join(entropy_changes_longer, rental_changes_longer, by = c("NAME", "year"))
+# Linear models
+race_model <- lm(RaceEntropyChange ~ RentalChange, joined)
+summary(race_model)
 
+income_model <- lm(IncomeEntropyChange ~ RentalChange, joined)
+summary(income_model)
 
 # Exploratory visualizations
-scatterplot <- ggplot(joined, aes(x = RentalChange, y = EntropyChange)) +
+race_plot <- ggplot(joined, aes(x = RentalChange, y = RaceEntropyChange)) +
   geom_point() +
   xlim(-15, 15) +
   ylim(-0.26, 0.25)
 
-scatterplot2 <- ggplot(joined_longer, aes(x = RentalChange, y = EntropyChange)) +
+ggsave("race_plot.pdf", width = 8, height = 6)
+
+income_plot <- ggplot(joined, aes(x = RentalChange, y = IncomeEntropyChange)) +
   geom_point() +
   xlim(-15, 15) +
-  ylim(-0.26, 0.25) 
+  ylim(-0.2, 0.2)
+
+ggsave("income_plot.pdf", width = 8, height = 6)
